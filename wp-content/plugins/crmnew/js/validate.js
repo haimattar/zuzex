@@ -316,8 +316,8 @@ $(document).ready(function() {
 		if ($(".frsttblesectfr").scrollLeft() > 0) { // If we moved the table, then we hide the checkboxes.
 			$("#frmevents .checkus5sw").hide();
 		} else {
+			$('.td-visible').css("left", 0); // Set the cells to its original location
 			$("#frmevents .checkus5sw").show();
-			$('.td-visible').css("left", 0); // Set the cell to its original location
 		}
 	}
 
