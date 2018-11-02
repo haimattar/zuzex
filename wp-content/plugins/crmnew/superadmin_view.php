@@ -28,7 +28,7 @@
 		<td class="checkus5sw">&nbsp;</td>
 		
 		<?php }?>
-				<td class="daupsec08"><h6>Numero Dossier</h6><span>30</span></td>
+				<td class="daupsec08 td-visible"><h6>Numero Dossier</h6><span>30</span></td>
 				<td class="daupsec09"><h6>Statut </h6><span>&nbsp;</span></td>
 				<td class="daupsec010"><h6>Begin Debut</h6> <span>40</span></td>
 				<td class="daupsec011"><h6>PU / ADMIN</h6> <span>39</span></td>
