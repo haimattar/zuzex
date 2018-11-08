@@ -283,11 +283,11 @@ function upload_sign_attachment(ids,rownos,fields,filenos,docs,pageurls){
 }
 
 $(document).ready(function() {
-	$('.frsttblesectfr').scroll(function() { // Horizontal scroll table - move the cells
+	$('.frsttblesectfr').on("scroll touchmove swipe", function() { // Horizontal scroll table - move the cells
 		fixateColumn();
 	});
 
-	$('tbody').scroll(function() { // Vertical scroll table - For cells that are visible on the screen, adjust the position
+	$('tbody').on("scroll touchmove swipe", function() { // Vertical scroll table - For cells that are visible on the screen, adjust the position
 		$('tbody td.daupsec08').each(function() {
 			if(isScrolledIntoView($(this))){
 				$(this).addClass('td-visible');
