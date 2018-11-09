@@ -704,6 +704,13 @@ body{font-family: 'Roboto', sans-serif;}
 	color: #fff !important;
 	padding: 0 23px 8px;
 }
+.error-msg {
+	color: red;
+	padding: 15px;
+}
+.counter-msg {
+	padding: 15px;
+}
 .template_sectdiv .checkus5sw input[type="checkbox"] {
     width: auto !important;
     height: 16px !important;

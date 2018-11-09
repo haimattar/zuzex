@@ -99,7 +99,7 @@
 	 
 	 //Multiple delete
 	 //==Update Docusign API==//
-	 function update_docusignapis($clientid,$filenos,$envelopeId){
+	function update_docusignapis($Docs) {
 		global $wpdb;
 		date_default_timezone_set("Europe/Paris");
 		$apiurl = get_option("apiurl");
@@ -107,192 +107,285 @@
 		$email = get_option("apiemail");
 		$accountId = get_option("accountId");
 		$password = get_option("apipassword");
-		 
+		$apiQueries = 0; // Counter of DocuSign API requests
+
 		// construct the authentication header:
 		$header = "<DocuSignCredentials><Username>" . $email . "</Username><Password>" . $password . "</Password><IntegratorKey>" . $integratorKey . "</IntegratorKey></DocuSignCredentials>";
-		$url = $apiurl."/accounts/".$accountId."/envelopes/".$envelopeId."";
+		$from_date = substr($Docs[0]->sendmaildate, 0, 10);
+		$url = "$apiurl/accounts/$accountId/envelopes?from_date=$from_date"; // Get envelopes from the date of the oldest unsigned document
+
 		$curl = curl_init($url);
 		curl_setopt($curl, CURLOPT_HEADER, false);
 		curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
 		curl_setopt($curl, CURLOPT_HTTPHEADER, array("X-DocuSign-Authentication: $header"));
 		$json_response = curl_exec($curl);
-		$response = json_decode($json_response);
-		$docusignstatus = $response->status;
-		$envelopeIds = $response->envelopeId;
-		$envelopeIds = $response->envelopeId;
-		if($docusignstatus=="sent"){
-			$sendmaildate = $response->sentDateTime;
-			$SQL = "UPDATE wp_clientinfo SET sendmaildate='".esc_sql($sendmaildate)."',docusignstatus='".esc_sql($docusignstatus)."' WHERE id='".$clientid."' AND envelopeId='".esc_sql($envelopeId)."'";
-			$wpdb->query($SQL);
-		}else if($docusignstatus=="delivered"){
-			$sendmaildate = $response->sentDateTime;	
-			$opendate = $response->deliveredDateTime;
-			$SQL = "UPDATE wp_clientinfo SET sendmaildate='".esc_sql($sendmaildate)."',opendate='".esc_sql($opendate)."',docusignstatus='".esc_sql($docusignstatus)."' WHERE id='".$clientid."' AND envelopeId='".esc_sql($envelopeId)."'";
-			$wpdb->query($SQL);
-		}else if($docusignstatus=="completed"){
-			$sendmaildate = $response->sentDateTime;			
-			$opendate = $response->deliveredDateTime;
-			$signdate = $response->completedDateTime;
-			$header = "<DocuSignCredentials><Username>" . $email . "</Username><Password>" . $password . "</Password><IntegratorKey>" . $integratorKey . "</IntegratorKey></DocuSignCredentials>";
-				$url = $apiurl."/accounts/".$accountId."/envelopes/".$envelopeId."/documents/";
-				$curl = curl_init($url);
-				curl_setopt($curl, CURLOPT_HEADER, false);
-				curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-				curl_setopt($curl, CURLOPT_HTTPHEADER, array("X-DocuSign-Authentication: $header"));
-				$json_response = curl_exec($curl);
-				$status = curl_getinfo($curl, CURLINFO_HTTP_CODE);
-				if ( $status != 200 ) {
-					echo "error calling webservice, status is:" . $status;
-					exit(-1);
-				}
-				$response = json_decode($json_response, true); 
-				curl_close($curl);
-				//  echo "<pre>";
-				// print_r($response);
-				if (!file_exists(ABSPATH.'wp-content/plugins/crm_new/files/'.$filenos)) {
-					mkdir(ABSPATH.'wp-content/plugins/crm_new/files/'.$filenos, 0755, true);
-				}
-				$attachments = array();
-				if(count($response)>0){
-					foreach($response['envelopeDocuments'] as $docs){
-						$filename = $docs['documentId']."-".$envelopeId."-".$docusignstatus;
-						$url = $apiurl."/accounts/".$accountId."/envelopes/".$envelopeId."/documents/".$docs['documentId']."";
-						$curl = curl_init($url);
-						curl_setopt($curl, CURLOPT_HEADER, false);
-						curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-						curl_setopt($curl, CURLOPT_HTTPHEADER, array("X-DocuSign-Authentication: $header"));
-						$json_response = curl_exec($curl);
-						$status = curl_getinfo($curl, CURLINFO_HTTP_CODE);
-						//echo $json_response;
-						
-						if ( $status != 200 ) {
-							echo "error calling webservice, status is:" . $status;
-							exit(-1);
-						}
-						curl_close($curl);
-						file_put_contents(ABSPATH."wp-content/plugins/crm_new/files/".$filenos."/".$filename.".pdf",$json_response);
-						$attachments[] = ABSPATH."wp-content/plugins/crm_new/files/".$filenos."/".$filename.".pdf";
-					}
-				}
-			//======Send To Google Drive======//
-			$docsarray = send_google_drive($clientid,$filenos,$attachments[0],$attachments[1]);
-			$docusign1 = $docsarray[0];
-			$docusign2 = $docsarray[1];
-			//======Send To Google Drive======//
-			$SQL = "UPDATE wp_clientinfo SET sendmaildate='".esc_sql($sendmaildate)."',opendate='".esc_sql($opendate)."',signdate='".esc_sql($signdate)."',docusignstatus='".esc_sql($docusignstatus)."',docusignorgs='',docusign1='".esc_sql($docusign1)."',docusign2='".esc_sql($docusign2)."' WHERE id='".$clientid."' AND envelopeId='".esc_sql($envelopeId)."'";
-			$wpdb->query($SQL);
-			$directory = ABSPATH.'wp-content/plugins/crm_new/files/'.$filenos;
-			rmdir($directory);
+		$generalResponse = json_decode($json_response);
+		curl_close($curl);
+		$apiQueries++;
+
+		if (isset($generalResponse->errorCode)) { //If DocuSign return error - show it.
+			$_SESSION['ErrorMsg'][] = "Update Error: $response->message";
+			return false;
 		}
 		
-		 return true;
-	 }
+		foreach ($Docs as $Doc) { // Document data from DB
+			$clientid = $Doc->id;
+			$filenos = $Doc->file_number;
+			$envelopeId = $Doc->envelopeId;
+			$dbSignStatus = $Doc->docusignstatus;
+
+			foreach ($generalResponse->envelopes as $envelope) {  // Document data from DocuSign
+				if($envelopeId != $envelope->envelopeId) {
+					continue;
+				}
+
+				$docusignstatus = $envelope->status;
+				$envelopeIds = $envelope->envelopeId;
+
+				if($docusignstatus == "sent" && $dbSignStatus != "sent") {
+					//The "sent" status is set by default after sending the email after the simulation. This piece of code will be reproduced in the case that the DocuSign status from immediately after the stimulation and creation of the envelope was not equal to "sent".
+					$url = "$apiurl/accounts/$accountId/envelopes/$envelopeIds";
+					$curl = curl_init($url);
+					curl_setopt($curl, CURLOPT_HEADER, false);
+					curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+					curl_setopt($curl, CURLOPT_HTTPHEADER, array("X-DocuSign-Authentication: $header"));
+					$json_response = curl_exec($curl);
+					$response = json_decode($json_response);
+					curl_close($curl);
+					$apiQueries++;
+
+					if (isset($response->errorCode)) {
+						$_SESSION['ErrorMsg'][] = "Record Updated Error: $filenos - $response->message";
+						continue;
+					}
+
+					$sendmaildate = $response->sentDateTime;
+					$SQL = "UPDATE wp_clientinfo SET sendmaildate='".esc_sql($sendmaildate)."',docusignstatus='".esc_sql($docusignstatus)."' WHERE id='".$clientid."' AND envelopeId='".esc_sql($envelopeId)."'";
+					$wpdb->query($SQL);
+
+				} else if($docusignstatus == "delivered" && $dbSignStatus != "delivered") {
+					//The "delivered" status is the "Opened" status.
+					$url = "$apiurl/accounts/$accountId/envelopes/$envelopeIds";
+					$curl = curl_init($url);
+					curl_setopt($curl, CURLOPT_HEADER, false);
+					curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+					curl_setopt($curl, CURLOPT_HTTPHEADER, array("X-DocuSign-Authentication: $header"));
+					$json_response = curl_exec($curl);
+					$response = json_decode($json_response);
+					curl_close($curl);
+					$apiQueries++;
+
+					if (isset($response->errorCode)) {
+						$_SESSION['ErrorMsg'][] = "Record Updated Error: $filenos - $response->message";
+						continue;
+					}
+
+					$sendmaildate = $response->sentDateTime;	
+					$opendate = $response->deliveredDateTime;
+					$SQL = "UPDATE wp_clientinfo SET sendmaildate='".esc_sql($sendmaildate)."',opendate='".esc_sql($opendate)."',docusignstatus='".esc_sql($docusignstatus)."' WHERE id='".$clientid."' AND envelopeId='".esc_sql($envelopeId)."'";
+					$wpdb->query($SQL);
+
+				} else if($docusignstatus == "completed") {
+					//The "completed" status is the "Signed" status.
+					$url = "$apiurl/accounts/$accountId/envelopes/$envelopeIds";
+					$curl = curl_init($url);
+					curl_setopt($curl, CURLOPT_HEADER, false);
+					curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+					curl_setopt($curl, CURLOPT_HTTPHEADER, array("X-DocuSign-Authentication: $header"));
+					$json_response = curl_exec($curl);
+					$response = json_decode($json_response);
+					curl_close($curl);
+					$apiQueries++;
+
+					if (isset($response->errorCode)) {
+						$_SESSION['ErrorMsg'][] = "Record Updated Error: $filenos - $response->message";
+						continue;
+					}
+
+					$sendmaildate = $response->sentDateTime;		
+					$opendate = $response->deliveredDateTime;
+					$signdate = $response->completedDateTime;
+
+					$url = "$apiurl/accounts/$accountId/envelopes/$envelopeId/documents/";
+					$curl = curl_init($url);
+					curl_setopt($curl, CURLOPT_HEADER, false);
+					curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+					curl_setopt($curl, CURLOPT_HTTPHEADER, array("X-DocuSign-Authentication: $header"));
+					$json_response = curl_exec($curl);
+					$status = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+					$apiQueries++;
+
+					if ( $status != 200 ) {
+						echo "error calling webservice, status is:" . $status;
+						exit(-1);
+					}
+
+					$response = json_decode($json_response, true); 
+					curl_close($curl);
+
+					if (!file_exists(ABSPATH.'wp-content/plugins/crm_new/files/'.$filenos)) {
+						mkdir(ABSPATH.'wp-content/plugins/crm_new/files/'.$filenos, 0755, true);
+					}
+
+					$attachments = array();
+					if(count($response) > 0) {
+						foreach ($response['envelopeDocuments'] as $docs) {
+							$filename = $docs['documentId']."-".$envelopeId."-".$docusignstatus;
+							$url = "$apiurl/accounts/$accountId/envelopes/$envelopeId/documents/".$docs['documentId'];
+							$curl = curl_init($url);
+							curl_setopt($curl, CURLOPT_HEADER, false);
+							curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+							curl_setopt($curl, CURLOPT_HTTPHEADER, array("X-DocuSign-Authentication: $header"));
+							$json_response = curl_exec($curl);
+							$status = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+							$apiQueries++;
+								
+							if($status != 200) {
+								echo "error calling webservice, status is:" . $status;
+								exit(-1);
+							}
+
+							curl_close($curl);
+							file_put_contents(ABSPATH."wp-content/plugins/crm_new/files/".$filenos."/".$filename.".pdf",$json_response);
+							$attachments[] = ABSPATH."wp-content/plugins/crm_new/files/".$filenos."/".$filename.".pdf";
+						}
+					}
+					//======Send To Google Drive======//
+					$docsarray = send_google_drive($clientid, $filenos, $attachments[0], $attachments[1]);
+					$docusign1 = $docsarray[0];
+					$docusign2 = $docsarray[1];
+					//======Send To Google Drive======//
+					$SQL = "UPDATE wp_clientinfo SET sendmaildate='".esc_sql($sendmaildate)."',opendate='".esc_sql($opendate)."',signdate='".esc_sql($signdate)."',docusignstatus='".esc_sql($docusignstatus)."',docusignorgs='',docusign1='".esc_sql($docusign1)."',docusign2='".esc_sql($docusign2)."' WHERE id='".$clientid."' AND envelopeId='".esc_sql($envelopeId)."'";
+					$wpdb->query($SQL);
+					$directory = ABSPATH.'wp-content/plugins/crm_new/files/'.$filenos;
+					rmdir($directory);
+				}
+			}
+		}
+		$_SESSION['apiQueries'] = $apiQueries;
+		return true;
+	}
 	 //======Send To Google Drive======//
-		function send_google_drive($id,$fileno,$filename1,$filename2){
+		function send_google_drive($id,$fileno,$filename1,$filename2) {
 			global $wpdb;
 			require(ABSPATH.'/wp-content/themes/enemat/googledrives/vendor/autoload.php');
-			$client = getClient();
+			if (!isset($client)) { //Prevent duplicate requests to the API GDrive
+				$client = getClient();
+			}
 			$service = new Google_Service_Drive($client);
 			$filenames = array();
 			$filenames[] = $filename1;
 			$filenames[] = $filename2;
 			$parentfolders = get_option("parentfolders");
 			$crmfolders = get_option("crmfolders");
+			$parents = $_SESSION['GDrive']['parents'];
+			$parentid = $_SESSION['GDrive']['parentid'];
+
 			//===Root Folder's Sub Folder======//
-			$results = $service->files->listFiles();
-			$parents = "";
-			try{
-			foreach ($results->getFiles() as $item) {
-				if ($item['name'] == $parentfolders) {
-						$parents = $item['id'];
-						break;
-				}
+			if(empty($parents)) { //Prevent duplicate requests to the API GDrive - parent folder remains the same during status update
+				$results = $service->files->listFiles(
+					['q' => "name = '$parentfolders' and mimeType = 'application/vnd.google-apps.folder'"] // Get only folder with name equal $parentfolders value
+				);
 			}
 			
-			 $optParams = array(
-				'pageSize' => 10,
-				'fields' => "nextPageToken, files(contentHints/thumbnail,fileExtension,iconLink,id,name,size,thumbnailLink,webContentLink,webViewLink,mimeType,parents)",
-				'q' => "'".$parents."' in parents"
-			);
-		   $results = $service->files->listFiles($optParams);
-		   $parentsarray = array();
-		   foreach ($results->getFiles() as $item) {
-				$parentsarray[$item['name']] = $item->getId();		  
-		   }
-		   $parentid = $parentsarray[$crmfolders];
-		  //===Root Folder's Sub Folder======//
-		  //===Sub Folder's Folders======//
-			$optParams1 = array(
-				'pageSize' => 10,
-				'fields' => "nextPageToken, files(contentHints/thumbnail,fileExtension,iconLink,id,name,size,thumbnailLink,webContentLink,webViewLink,mimeType,parents)",
-				'q' => "'".$parentid."' in parents"
-			);
-			$results = $service->files->listFiles($optParams1);
-		   //===Sub Folder's Folders======//	
-		  //==========CREATE FOLDER====//
-			$childid = "";
-			foreach ($results->getFiles() as $item) {
-				if ($item['name'] == $fileno) {
-					$childid = $item['id'];
-						break;
+			try {
+				if(empty($parents)) {//Prevent duplicate requests to the API GDrive - parent folder remains the same during status update
+					foreach ($results->getFiles() as $item) {
+						if ($item['name'] == $parentfolders) {
+								$parents = $item['id'];
+								break;
+						}
 					}
-			}
-			if(empty($childid)){
-				$fileMetadata = new Google_Service_Drive_DriveFile(array(
-									'name' => $fileno,
-									'parents'=>array($parentid),
-									'mimeType' => 'application/vnd.google-apps.folder'));
-									$file = $service->files->create($fileMetadata, array(
-									'fields' => 'id'));
-				 $folderId = $file->id;
-			 }else{
-				$folderId = $childid;
-			 }
-			 $dropboxurls = array();
-			 $counter = 0;
-			 foreach($filenames as $filesends){
-				$counter = $counter+1;
-				if($counter==1){
-					$fnames = "OFFRE DE PRIME - ".$fileno."";
-				}else if($counter==2){
-					$fnames = "CERTIFICATE - ".$fileno."";
+					$_SESSION['GDrive']['parents'] = $parents;
 				}
-				 if(!empty($filesends)){
+				if(empty($parentid)) {//Prevent duplicate requests to the API GDrive - first subfolder remains the same during status update
+					$optParams = array(
+						'pageSize' => 10,
+						'fields' => "nextPageToken, files(contentHints/thumbnail,fileExtension,iconLink,id,name,size,thumbnailLink,webContentLink,webViewLink,mimeType,parents)",
+						'q' => "'".$parents."' in parents"
+					);
+					$results = $service->files->listFiles($optParams);
+					$parentsarray = array();
+					foreach ($results->getFiles() as $item) {
+							$parentsarray[$item['name']] = $item->getId();		  
+					}
+					$parentid = $parentsarray[$crmfolders];
+					$_SESSION['GDrive']['parentid'] = $parentid;
+				}
+			//===Root Folder's Sub Folder======//
+			//===Sub Folder's Folders======//
+				$optParams1 = array(
+					'pageSize' => 10,
+					'fields' => "nextPageToken, files(contentHints/thumbnail,fileExtension,iconLink,id,name,size,thumbnailLink,webContentLink,webViewLink,mimeType,parents)",
+					'q' => "'".$parentid."' in parents"
+				);
+				$results = $service->files->listFiles($optParams1);
+			//===Sub Folder's Folders======//	
+			//==========CREATE FOLDER====//
+				$childid = "";
+				foreach ($results->getFiles() as $item) {
+					if ($item['name'] == $fileno) {
+						$childid = $item['id'];
+							break;
+						}
+				}
+				if(empty($childid)) {
 					$fileMetadata = new Google_Service_Drive_DriveFile(array(
-								'name' => $fnames,
-								'parents' => array($folderId)
-							));
-							$content = file_get_contents($filesends);
-							$files = $service->files->create($fileMetadata, array(
-									'data' => $content,
-									'uploadType' => 'resumable',
-									'fields' => 'id'));
-					$fileids = $files->id;
-					$dropboxurls[] = "https://drive.google.com/open?id=".$fileids."";
-					$newPermission = new Google_Service_Drive_Permission();
-					$newPermission->setType('anyone');
-					$newPermission->setRole('reader');
-					$service->permissions->create($fileids, $newPermission);
-					@unlink(ABSPATH."wp-content/plugins/crm_new/files/".$fileno."/".basename($filesends));					
+										'name' => $fileno,
+										'parents'=>array($parentid),
+										'mimeType' => 'application/vnd.google-apps.folder'));
+										$file = $service->files->create($fileMetadata, array(
+										'fields' => 'id'));
+					$folderId = $file->id;
+				} else {
+					$folderId = $childid;
 				}
+				$dropboxurls = array();
+				$counter = 0;
+				foreach ($filenames as $filesends) {
+					$counter = $counter + 1;
+					if($counter == 1) {
+						$fnames = "OFFRE DE PRIME - $fileno";
+					} else if($counter == 2) {
+						$fnames = "CERTIFICATE - $fileno";
+					}
+					if(!empty($filesends)) {
+						$fileMetadata = new Google_Service_Drive_DriveFile(array(
+							'name' => $fnames,
+							'parents' => array($folderId)
+						));
+						$content = file_get_contents($filesends);
+						$files = $service->files->create($fileMetadata, array(
+							'data' => $content,
+							'uploadType' => 'resumable',
+							'fields' => 'id'
+						));
+						$fileids = $files->id;
+						$dropboxurls[] = "https://drive.google.com/open?id=".$fileids."";
+						$newPermission = new Google_Service_Drive_Permission();
+						$newPermission->setType('anyone');
+						$newPermission->setRole('reader');
+						$service->permissions->create($fileids, $newPermission);
+						@unlink(ABSPATH."wp-content/plugins/crm_new/files/".$fileno."/".basename($filesends));					
+					}
+				}
+			} catch (Google_ServiceException $e) {
+				$file_save = false;
+				file_put_contents(ABSPATH."wp-content/themes/enemat/ajax_scripts/error_logs.txt",$e->getMessage(),FILE_APPEND);
+			} catch (Google_IOException $e) {
+				$file_save = false;
+				file_put_contents(ABSPATH."wp-content/themes/enemat/ajax_scripts/error_logs.txt",$e->getMessage(),FILE_APPEND);
+			} catch (Google_Exception $e) {
+				$file_save = false;
+				file_put_contents(ABSPATH."wp-content/themes/enemat/ajax_scripts/error_logs.txt",$e->getMessage(),FILE_APPEND);
+			} catch (Exception $e) {
+				$file_save = false;
+				file_put_contents(ABSPATH."wp-content/themes/enemat/ajax_scripts/error_logs.txt",$e->getMessage(),FILE_APPEND);
 			}
-			}catch (Google_ServiceException $e) {
-				   $file_save = false;
-				   file_put_contents(ABSPATH."wp-content/themes/enemat/ajax_scripts/error_logs.txt",$e->getMessage(),FILE_APPEND);
-				}catch (Google_IOException $e) {
-				  $file_save = false;
-				  file_put_contents(ABSPATH."wp-content/themes/enemat/ajax_scripts/error_logs.txt",$e->getMessage(),FILE_APPEND);
-				} catch (Google_Exception $e) {
-				  $file_save = false;
-				  file_put_contents(ABSPATH."wp-content/themes/enemat/ajax_scripts/error_logs.txt",$e->getMessage(),FILE_APPEND);
-				}catch (Exception $e) {
-					$file_save = false;
-					file_put_contents(ABSPATH."wp-content/themes/enemat/ajax_scripts/error_logs.txt",$e->getMessage(),FILE_APPEND);
-				}
 			return $dropboxurls;
-			 
 		}
-		function getClient(){
+
+		function getClient() {
 			$client = new Google_Client();
 			$client->setApplicationName('Google Drive API PHP Quickstart');
 			$client->setScopes(Google_Service_Drive::DRIVE);
@@ -300,21 +393,27 @@
 			return $client;
 		}
 		//======Send To Google Drive======//
-	 if(isset($_GET['update_docusign']) && $_GET['update_docusign']=="yes"){
-		$SQLDOCS = "SELECT * FROM  wp_clientinfo ORDER BY id DESC";
+	if(isset($_GET['update_docusign']) && $_GET['update_docusign'] == "yes") {
+		$SQLDOCS = "SELECT * FROM  wp_clientinfo ORDER BY sendmaildate ASC"; // Sort by date of sending the mail, the oldest - the first.
 		$rsDocs = $wpdb->get_results($SQLDOCS);
-		if(count($rsDocs)){
-				 for($j=0;$j<count($rsDocs);$j++){	
-					$ID = $rsDocs[$j]->id;
-					if(!empty($rsDocs[$j]->envelopeId) && $rsDocs[$j]->docusignstatus!="completed"){
-						 update_docusignapis($rsDocs[$j]->id,$rsDocs[$j]->file_number,$rsDocs[$j]->envelopeId);					 				 
-					}
-			}		
-			$_SESSION['SuccessMsg'] = "Record Updated Successfully.....";	 
+
+		if(count($rsDocs)) {
+			// From the resulting array, delete the records with the status "completed", then send the entire array to the DocuSign status update function.
+			foreach ($rsDocs as $key => $Docs) {
+				if(empty($Docs->envelopeId) || $Docs->docusignstatus == "completed") {
+					unset($rsDocs[$key]);
+				}
+			}
+
+			if( update_docusignapis(array_values($rsDocs)) === true) {
+				$_SESSION['SuccessMsg'] = "Record Updated Successfully.....";
+			}
+
+			unset($_SESSION['GDrive']); // Clear parent and subfolder id's from this session.
 			wp_redirect($siteurl."/wp-admin/admin.php?page=crm_new");	
 			exit; 
 		}
-	 }
+	}
 	//==Update Docusign API==//
 	$datemontharray = array("01"=>"Janvier","02"=>"Février","03"=>"Mars","04"=>"Avril","05"=>"Mai","06"=>"Juin","07"=>"Juillet","08"=>"Août","09"=>"Septembre","10"=>"Octobre","11"=>"Novembre","12"=>"Décembre");
     $search_by_array= array("file_number"=>"(30)-NUMERO DOSSIER","pusalesname"=>"(0)-COMMERCIAL","pucompany_name"=>"(10)INSTALLATEUR","pusociety_number"=>"(11)SIRET","pufirst_name"=>"(2) PU NOM","pusociety_postcode"=>"(13) CP","pucity"=>"(14) PU Ville","name"=>"(16) CLIENT NOM","ville"=>"(22) CLIENT Ville","client_society_name"=>"(36) Nom societé","de_siren"=>"(37) SIREN","fiche"=>"(23) FICHE");
@@ -353,15 +452,29 @@ input[type="file"] {
 		<?php }?>
 </div>	
 <div class="frsttblesectfr">
-<form name="frmevents" id="frmevents" action="" method="Post" enctype="multipart/form-data">
-				<?php if($roles=="administrator"){ 				
-					include("administrator_view.php");
-				 }else if($roles=="superadmin" || $roles=="admin"){
-				// include("puview.php");
-				include("superadmin_view.php");
-				 }else if($roles=="professionaluser"){
-					include("puview.php");
-				 }?>
-</form>
+	<?php if(isset($_SESSION['apiQueries'])) { // Show API requests counter ?>
+		<!-- <div class="counter-msg"><?php //If you need to display the number of DocuSign API requests, please uncomment these three lines.
+			// echo "Number of DocuSign API requests: " . $_SESSION['apiQueries'];
+			unset($_SESSION['apiQueries']); ?>
+		</div> -->
+	<?php } ?>
+	<?php if(isset($_SESSION['ErrorMsg'])) { // Show error message ?>
+		<pre class="error-msg"><?php
+			foreach ($_SESSION['ErrorMsg'] as $ErrorMsg) {
+				echo $ErrorMsg . "\n";
+			}
+			unset($_SESSION['ErrorMsg']); ?>
+		</pre>
+	<?php } ?>
+	<form name="frmevents" id="frmevents" action="" method="Post" enctype="multipart/form-data">
+		<?php if($roles == "administrator") { 				
+			include("administrator_view.php");
+		} else if($roles == "superadmin" || $roles == "admin") {
+			// include("puview.php");
+			include("superadmin_view.php");
+		} else if($roles == "professionaluser") {
+			include("puview.php");
+		} ?>
+	</form>
 </div>
 </div>
